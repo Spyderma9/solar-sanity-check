@@ -12,6 +12,12 @@ import {
   paybackYear,
 } from './lib/financials';
 import { getVerdict } from './lib/verdict';
+import {
+  cashPurchase,
+  loanFinanced,
+  leaseFinanced,
+  dealerFeeImpact,
+} from './lib/financing';
 
 function friendlyError(message) {
   if (message.includes('403')) {
@@ -29,6 +35,21 @@ const VERDICT_COLORS = {
   MARGINAL: '#b35900', // amber, dark enough for white text
   NO: '#c62828', // red
 };
+
+const fmtMoney = (n) =>
+  (n < 0 ? '−$' : '$') + Math.abs(Math.round(n)).toLocaleString();
+
+function FinancingColumn({ title, option, extra }) {
+  return (
+    <div style={{ flex: 1, border: '1px solid #ccc', borderRadius: 8, padding: '0.75rem' }}>
+      <h3 style={{ margin: '0 0 0.5rem' }}>{title}</h3>
+      <p>Upfront: {fmtMoney(option.summary.upfrontCost)}</p>
+      <p>Payback: {option.summary.paybackYear ? `${option.summary.paybackYear} years` : 'never (25 yrs)'}</p>
+      <p>25-yr net: {fmtMoney(option.summary.year25NetPosition)}</p>
+      {extra}
+    </div>
+  );
+}
 
 function App() {
   const solarKeyLoaded = Boolean(import.meta.env.VITE_SOLAR_KEY);
@@ -143,6 +164,7 @@ function App() {
       sizeKw: systemSizeKw(config.panelsCount, panelCapacityWatts),
       year1Production: cashFlow[0].production,
       cost,
+      cashFlow,
       payback,
       netSavings25,
       segmentCount: roofSegmentStats.length,
@@ -151,6 +173,19 @@ function App() {
       verdict,
     };
   }, [solarData, billData]);
+
+  // Dealer-fee slider (0–30%), stored as a whole percent for clean stepping
+  const [dealerFeePercent, setDealerFeePercent] = useState(0);
+
+  // Financing comparison — recomputes live as the slider moves
+  const financing = useMemo(() => {
+    if (!results) return null;
+    const fee = dealerFeePercent / 100;
+    const cash = cashPurchase(results.cost, results.cashFlow, fee);
+    const loan = loanFinanced(results.cost, results.cashFlow, fee);
+    const lease = leaseFinanced(results.cashFlow);
+    return { cash, loan, lease, impact: dealerFeeImpact(loan) };
+  }, [results, dealerFeePercent]);
 
   return (
     <div style={{ maxWidth: 720, margin: '2rem auto', fontFamily: 'system-ui' }}>
@@ -226,6 +261,52 @@ function App() {
             <p>Roof segments: {results.segmentCount}</p>
             <p>Dominant orientation: {Math.round(results.dominantAzimuth)}° azimuth</p>
             <p>Max sunshine: {Math.round(results.maxSunshineHoursPerYear).toLocaleString()} hours/year</p>
+
+            {financing && (
+              <>
+                <h2>How you pay changes everything</h2>
+                {dealerFeePercent > 0 && (
+                  <p>
+                    System: {fmtMoney(financing.cash.summary.baseCost)} → With dealer fee:{' '}
+                    <strong>{fmtMoney(financing.cash.summary.effectiveCost)}</strong>
+                  </p>
+                )}
+                <div style={{ display: 'flex', gap: '0.75rem' }}>
+                  <FinancingColumn title="Cash" option={financing.cash} />
+                  <FinancingColumn title="Loan"
+                    option={financing.loan}
+                    extra={<p>Monthly: {fmtMoney(financing.loan.rows[0].annualPayment / 12)}</p>}
+                  />
+                  <FinancingColumn title="Lease" option={financing.lease}
+                    extra={<p style={{ color: '#555', fontStyle: 'italic' }}>Never owned — panels belong to the lessor</p>}
+                  />
+                </div>
+
+                <div style={{ margin: '1rem 0' }}>
+                  <label>
+                    Dealer fee: <strong>{dealerFeePercent}%</strong>{' '}
+                    <input
+                      type="range"
+                      min="0"
+                      max="30"
+                      step="1"
+                      value={dealerFeePercent}
+                      onChange={(e) => setDealerFeePercent(Number(e.target.value))}
+                      style={{ width: 240, verticalAlign: 'middle' }}
+                    />
+                  </label>
+                  <p style={{ fontSize: '1.15rem', fontWeight: 700 }}>
+                    {dealerFeePercent === 0
+                      ? 'No dealer fee — you keep every dollar of these savings.'
+                      : `A ${dealerFeePercent}% dealer fee adds ${financing.impact.addedPaybackYears} year${financing.impact.addedPaybackYears === 1 ? '' : 's'} to your payback and costs you ${fmtMoney(financing.impact.lifetimeSavingsLost)} in lifetime savings.`}
+                  </p>
+                  <p style={{ color: '#555' }}>
+                    Dealer fees can add up to 30% to your cost — financing options with no
+                    dealer fee (like ethical solar lenders) protect these savings.
+                  </p>
+                </div>
+              </>
+            )}
           </>
         ) : (
           status
