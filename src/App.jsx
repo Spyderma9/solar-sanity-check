@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { TEST_ADDRESS } from './fixtures/testAddress';
 import { getBuildingInsights } from './api/solar';
-import { callGemini, extractBillData } from './api/gemini';
+import { callGemini, extractBillData, extractQuoteData } from './api/gemini';
 import {
   ANNUAL_USAGE_KWH,
   ELECTRICITY_RATE,
@@ -18,6 +18,7 @@ import {
   leaseFinanced,
   dealerFeeImpact,
 } from './lib/financing';
+import { analyzeQuotes } from './lib/quoteCheck';
 
 function friendlyError(message) {
   if (message.includes('403')) {
@@ -38,6 +39,13 @@ const VERDICT_COLORS = {
 
 const fmtMoney = (n) =>
   (n < 0 ? '−$' : '$') + Math.abs(Math.round(n)).toLocaleString();
+
+// Quote verdict colors (same palette as the main verdict badge)
+const QUOTE_VERDICT_COLORS = {
+  FAIR: '#1a7f37',
+  OVERPRICED: '#b35900',
+  PREDATORY: '#c62828',
+};
 
 function FinancingColumn({ title, option, extra }) {
   return (
@@ -102,6 +110,48 @@ function App() {
       setBillStatus(`Error: ${err.message}`);
     }
   }
+
+  const [quoteStatus, setQuoteStatus] = useState('');
+  const [quoteData, setQuoteData] = useState(null); // parsed quote fields
+  const [quoteRawText, setQuoteRawText] = useState(''); // shown only if JSON parsing fails
+
+  async function handleQuoteUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    setQuoteStatus('Extracting…');
+    setQuoteData(null);
+    setQuoteRawText('');
+
+    try {
+      const raw = await extractQuoteData(file);
+      console.log('Raw Gemini quote response:', raw);
+
+      // Strip accidental ```json fences before parsing
+      const cleaned = raw
+        .replace(/^\s*```(?:json)?\s*/i, '')
+        .replace(/\s*```\s*$/, '')
+        .trim();
+
+      try {
+        const parsed = JSON.parse(cleaned);
+        // Expect an array of options; tolerate a bare object by wrapping it
+        setQuoteData(Array.isArray(parsed) ? parsed : [parsed]);
+        setQuoteStatus('Extracted');
+      } catch {
+        setQuoteStatus('Could not parse JSON — raw response below:');
+        setQuoteRawText(raw);
+      }
+    } catch (err) {
+      setQuoteStatus(`Error: ${err.message}`);
+    }
+  }
+
+  // Judge all extracted quote options (pure; re-runs when a new quote is parsed)
+  const quoteAnalysis = useMemo(
+    () => (quoteData ? analyzeQuotes(quoteData) : null),
+    [quoteData]
+  );
 
   useEffect(() => {
     getBuildingInsights(TEST_ADDRESS.lat, TEST_ADDRESS.lng)
@@ -220,6 +270,80 @@ function App() {
           </>
         )}
         {billRawText && <pre style={{ whiteSpace: 'pre-wrap' }}>{billRawText}</pre>}
+      </div>
+
+      {/* Solar quote upload + extraction (no flagging yet) */}
+      <div>
+        <label>
+          Upload solar quote (image or PDF):{' '}
+          <input
+            type="file"
+            accept="image/*,application/pdf"
+            onChange={handleQuoteUpload}
+          />
+        </label>
+        {quoteStatus && <p>{quoteStatus}</p>}
+        {quoteData && quoteAnalysis && (
+          <>
+            <p style={{ fontSize: '1.15rem', fontWeight: 700 }}>
+              {quoteAnalysis.summary.headline}
+            </p>
+            {quoteData.map((opt, i) => {
+              const analysis = quoteAnalysis.options[i];
+              const isWorst =
+                analysis.verdict === quoteAnalysis.summary.worstVerdict &&
+                quoteAnalysis.summary.worstVerdict !== 'FAIR';
+              return (
+                <div
+                  key={opt.optionLabel ?? i}
+                  style={{
+                    marginBottom: '0.75rem',
+                    padding: '0.75rem',
+                    borderRadius: 8,
+                    border: isWorst ? '3px solid #c62828' : '1px solid #ccc',
+                  }}
+                >
+                  <p style={{ fontWeight: 700, margin: '0 0 0.25rem' }}>
+                    {opt.optionLabel ?? `Option ${i + 1}`}{' '}
+                    <span
+                      style={{
+                        background: QUOTE_VERDICT_COLORS[analysis.verdict],
+                        color: '#fff',
+                        borderRadius: 4,
+                        padding: '0.1rem 0.5rem',
+                        marginLeft: '0.5rem',
+                      }}
+                    >
+                      {analysis.verdict}
+                    </span>
+                  </p>
+                  <p style={{ margin: '0.25rem 0', color: '#555' }}>
+                    {opt.totalPrice != null ? `$${opt.totalPrice.toLocaleString()}` : '?'} ·{' '}
+                    {opt.systemSizeKw ?? '?'} kW ·{' '}
+                    {opt.pricePerWatt != null ? `$${opt.pricePerWatt.toFixed(2)}/W` : '?'}
+                    {opt.loanApr != null && ` · ${(opt.loanApr * 100).toFixed(2)}% APR`}
+                    {opt.loanTermYears != null && ` · ${opt.loanTermYears} yrs`}
+                    {opt.dealerOrOriginationFee != null &&
+                      ` · fee $${opt.dealerOrOriginationFee.toLocaleString()}`}
+                  </p>
+                  <ul style={{ margin: '0.25rem 0 0.25rem 1.25rem' }}>
+                    {analysis.flags.map((flag) => (
+                      <li key={flag}>{flag}</li>
+                    ))}
+                  </ul>
+                  {analysis.fairPriceDelta != null && (
+                    <p style={{ margin: '0.25rem 0 0' }}>
+                      {analysis.fairPriceDelta > 0
+                        ? `${fmtMoney(analysis.fairPriceDelta)} above fair-market price`
+                        : 'At or below fair-market price'}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </>
+        )}
+        {quoteRawText && <pre style={{ whiteSpace: 'pre-wrap' }}>{quoteRawText}</pre>}
       </div>
 
       <div id="results">

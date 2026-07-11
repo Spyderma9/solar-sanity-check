@@ -78,3 +78,35 @@ export async function extractBillData(file) {
   ]);
   return raw;
 }
+
+const QUOTE_PROMPT = `You are reading a solar installer's quote or proposal. It may contain one or several pricing/financing options. Return ONLY strict JSON — no markdown, no code fences, no prose — as an ARRAY with one element per option found (typically 1-3). If only one option exists, return a single-element array. Each element must have exactly this shape:
+[
+  {
+    "optionLabel": string,
+    "totalPrice": number,
+    "systemSizeKw": number,
+    "pricePerWatt": number,
+    "loanApr": number,
+    "loanTermYears": number,
+    "dealerOrOriginationFee": number
+  }
+]
+
+Rules for each option:
+- optionLabel: a short name for the option as the quote presents it (e.g. "Cash", "Option B - 25yr loan", "Premium package"). If unnamed, invent a brief descriptive label.
+- totalPrice: total system price in dollars for that option.
+- systemSizeKw: system size in kW.
+- pricePerWatt: $/W. If not stated directly, compute totalPrice / (systemSizeKw * 1000).
+- loanApr: the loan interest rate as a decimal (e.g. 8.9% -> 0.089). null if the option is not financed or no rate is stated.
+- loanTermYears: loan term in years. null if not stated.
+- dealerOrOriginationFee: any dealer fee, origination fee, or financing fee in dollars. null if not stated.
+- Use null for any field that cannot be found (except pricePerWatt, which should be computed from totalPrice and systemSizeKw when possible).`;
+
+export async function extractQuoteData(file) {
+  const base64 = await fileToBase64(file);
+  const raw = await generateContent([
+    { text: QUOTE_PROMPT },
+    { inline_data: { mime_type: file.type, data: base64 } },
+  ]);
+  return raw;
+}
