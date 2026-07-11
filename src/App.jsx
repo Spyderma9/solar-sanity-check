@@ -19,6 +19,7 @@ import {
   dealerFeeImpact,
 } from './lib/financing';
 import { analyzeQuotes } from './lib/quoteCheck';
+import RoofDesigner from './RoofDesigner';
 
 function friendlyError(message) {
   if (message.includes('403')) {
@@ -171,13 +172,41 @@ function App() {
       (billData.annualUsageKwh != null || billData.electricityRate != null)
   );
 
-  // Re-runs automatically when the solar data loads or a bill is extracted
+  // Recommended config (panels are sorted best-first, so config N = first N panels)
+  const recommendedCount = useMemo(() => {
+    if (!solarData) return null;
+    const annualUsageKwh = billData?.annualUsageKwh ?? ANNUAL_USAGE_KWH;
+    return pickBestConfig(solarData.solarPotential.solarPanelConfigs, annualUsageKwh)
+      .panelsCount;
+  }, [solarData, billData]);
+
+  // null = user hasn't toggled anything yet, follow the recommendation
+  const [customPanelIds, setCustomPanelIds] = useState(null);
+
+  const activePanelIds = useMemo(() => {
+    if (customPanelIds) return customPanelIds;
+    if (recommendedCount == null) return new Set();
+    return new Set(Array.from({ length: recommendedCount }, (_, i) => i));
+  }, [customPanelIds, recommendedCount]);
+
+  function togglePanel(index) {
+    const next = new Set(activePanelIds);
+    if (next.has(index)) {
+      next.delete(index);
+    } else {
+      next.add(index);
+    }
+    setCustomPanelIds(next);
+  }
+
+  // Re-runs automatically when the solar data loads, a bill is extracted,
+  // or panels are toggled on the roof canvas
   const results = useMemo(() => {
     if (!solarData) return null;
 
     const {
       panelCapacityWatts,
-      solarPanelConfigs,
+      solarPanels,
       maxArrayPanelsCount,
       roofSegmentStats,
       maxSunshineHoursPerYear,
@@ -186,18 +215,25 @@ function App() {
     const annualUsageKwh = billData?.annualUsageKwh ?? ANNUAL_USAGE_KWH;
     const electricityRate = billData?.electricityRate ?? ELECTRICITY_RATE;
 
-    const config = pickBestConfig(solarPanelConfigs, annualUsageKwh);
-    const cashFlow = buildCashFlow(config, panelCapacityWatts, {
+    const panelsCount = activePanelIds.size;
+    const yearlyEnergyDcKwh = [...activePanelIds].reduce(
+      (sum, i) => sum + (solarPanels[i]?.yearlyEnergyDcKwh ?? 0),
+      0
+    );
+
+    const cashFlow = buildCashFlow({ yearlyEnergyDcKwh }, panelCapacityWatts, {
       annualUsageKwh,
       electricityRate,
     });
-    const cost = systemCost(config.panelsCount, panelCapacityWatts);
+    const cost = systemCost(panelsCount, panelCapacityWatts);
 
     const largestSegment = roofSegmentStats.reduce((best, s) =>
       s.stats.areaMeters2 > best.stats.areaMeters2 ? s : best
     );
 
-    const payback = paybackYear(cashFlow, cost);
+    // With zero panels there is no system: cost 0 would trivially "pay back"
+    // in year 1, so force the never-pays-back path instead
+    const payback = panelsCount === 0 ? null : paybackYear(cashFlow, cost);
     const netSavings25 = cashFlow[cashFlow.length - 1].cumulativeSavings;
 
     const verdict = getVerdict({
@@ -209,9 +245,9 @@ function App() {
     });
 
     return {
-      panelsCount: config.panelsCount,
+      panelsCount,
       maxArrayPanelsCount,
-      sizeKw: systemSizeKw(config.panelsCount, panelCapacityWatts),
+      sizeKw: systemSizeKw(panelsCount, panelCapacityWatts),
       year1Production: cashFlow[0].production,
       cost,
       cashFlow,
@@ -222,7 +258,7 @@ function App() {
       maxSunshineHoursPerYear,
       verdict,
     };
-  }, [solarData, billData]);
+  }, [solarData, billData, activePanelIds]);
 
   // Dealer-fee slider (0–30%), stored as a whole percent for clean stepping
   const [dealerFeePercent, setDealerFeePercent] = useState(0);
@@ -346,6 +382,27 @@ function App() {
         {quoteRawText && <pre style={{ whiteSpace: 'pre-wrap' }}>{quoteRawText}</pre>}
       </div>
 
+      <RoofDesigner
+        key={solarData ? 'center' : 'fallback'}
+        lat={solarData?.center?.latitude ?? TEST_ADDRESS.lat}
+        lng={solarData?.center?.longitude ?? TEST_ADDRESS.lng}
+        panels={solarData?.solarPotential.solarPanels ?? []}
+        panelWidthMeters={solarData?.solarPotential.panelWidthMeters}
+        panelHeightMeters={solarData?.solarPotential.panelHeightMeters}
+        roofSegments={solarData?.solarPotential.roofSegmentStats ?? []}
+        activePanelIds={activePanelIds}
+        onTogglePanel={togglePanel}
+        onReset={() => setCustomPanelIds(null)}
+        isCustomized={customPanelIds !== null}
+      />
+      {results && (
+        <p style={{ fontWeight: 700 }}>
+          {results.panelsCount} active panels · {results.sizeKw.toFixed(1)} kW ·{' '}
+          {Math.round(results.year1Production).toLocaleString()} kWh/yr
+          {recommendedCount != null && ` (recommended: ${recommendedCount})`}
+        </p>
+      )}
+
       <div id="results">
         {results ? (
           <>
@@ -374,7 +431,7 @@ function App() {
             </div>
 
             <h2>Results</h2>
-            <p>Recommended panels: {results.panelsCount} (roof max: {results.maxArrayPanelsCount})</p>
+            <p>Active panels: {results.panelsCount} (roof max: {results.maxArrayPanelsCount})</p>
             <p>System size: {results.sizeKw.toFixed(1)} kW</p>
             <p>Year-1 production: {Math.round(results.year1Production).toLocaleString()} kWh</p>
             <p>System cost: ${results.cost.toLocaleString()}</p>
