@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { TEST_ADDRESS } from './fixtures/testAddress';
 import { getBuildingInsights } from './api/solar';
+import { callGemini, extractBillData } from './api/gemini';
 import {
   ANNUAL_USAGE_KWH,
   ELECTRICITY_RATE,
@@ -33,59 +34,123 @@ function App() {
   const solarKeyLoaded = Boolean(import.meta.env.VITE_SOLAR_KEY);
   const geminiKeyLoaded = Boolean(import.meta.env.VITE_GEMINI_API_KEY);
   const [status, setStatus] = useState('Loading…');
-  const [results, setResults] = useState(null);
+  const [solarData, setSolarData] = useState(null);
+  const [geminiResult, setGeminiResult] = useState('');
+
+  async function testGemini() {
+    setGeminiResult('Calling Gemini…');
+    try {
+      const text = await callGemini('Say hello in one word.');
+      setGeminiResult(text);
+    } catch (err) {
+      setGeminiResult(`Error: ${err.message}`);
+    }
+  }
+
+  const [billStatus, setBillStatus] = useState('');
+  const [billData, setBillData] = useState(null); // parsed { annualUsageKwh, electricityRate }
+  const [billRawText, setBillRawText] = useState(''); // shown only if JSON parsing fails
+
+  async function handleBillUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    setBillStatus('Extracting…');
+    setBillData(null);
+    setBillRawText('');
+
+    try {
+      const raw = await extractBillData(file);
+      console.log('Raw Gemini bill response:', raw);
+
+      // Strip accidental ```json fences before parsing
+      const cleaned = raw
+        .replace(/^\s*```(?:json)?\s*/i, '')
+        .replace(/\s*```\s*$/, '')
+        .trim();
+
+      try {
+        const parsed = JSON.parse(cleaned);
+        setBillData(parsed);
+        setBillStatus('Extracted');
+      } catch {
+        setBillStatus('Could not parse JSON — raw response below:');
+        setBillRawText(raw);
+      }
+    } catch (err) {
+      setBillStatus(`Error: ${err.message}`);
+    }
+  }
 
   useEffect(() => {
     getBuildingInsights(TEST_ADDRESS.lat, TEST_ADDRESS.lng)
       .then((data) => {
         console.log(data);
-
-        const {
-          panelCapacityWatts,
-          solarPanelConfigs,
-          maxArrayPanelsCount,
-          roofSegmentStats,
-          maxSunshineHoursPerYear,
-        } = data.solarPotential;
-
-        const config = pickBestConfig(solarPanelConfigs, ANNUAL_USAGE_KWH);
-        const cashFlow = buildCashFlow(config, panelCapacityWatts);
-        const cost = systemCost(config.panelsCount, panelCapacityWatts);
-
-        const largestSegment = roofSegmentStats.reduce((best, s) =>
-          s.stats.areaMeters2 > best.stats.areaMeters2 ? s : best
-        );
-
-        const payback = paybackYear(cashFlow, cost);
-        const netSavings25 = cashFlow[cashFlow.length - 1].cumulativeSavings;
-
-        const verdict = getVerdict({
-          paybackYear: payback,
-          netSavings25yr: netSavings25,
-          dominantAzimuth: largestSegment.azimuthDegrees,
-          maxSunshineHoursPerYear,
-          electricityRate: ELECTRICITY_RATE,
-        });
-
-        setResults({
-          panelsCount: config.panelsCount,
-          maxArrayPanelsCount,
-          sizeKw: systemSizeKw(config.panelsCount, panelCapacityWatts),
-          year1Production: cashFlow[0].production,
-          cost,
-          payback,
-          netSavings25,
-          segmentCount: roofSegmentStats.length,
-          dominantAzimuth: largestSegment.azimuthDegrees,
-          maxSunshineHoursPerYear,
-          verdict,
-        });
+        setSolarData(data);
         setStatus('Loaded');
       })
       .catch((err) => {
         setStatus(friendlyError(err.message));
       });
   }, []);
+
+  // True when a bill was extracted with usable values
+  const usingBill = Boolean(
+    billData &&
+      (billData.annualUsageKwh != null || billData.electricityRate != null)
+  );
+
+  // Re-runs automatically when the solar data loads or a bill is extracted
+  const results = useMemo(() => {
+    if (!solarData) return null;
+
+    const {
+      panelCapacityWatts,
+      solarPanelConfigs,
+      maxArrayPanelsCount,
+      roofSegmentStats,
+      maxSunshineHoursPerYear,
+    } = solarData.solarPotential;
+
+    const annualUsageKwh = billData?.annualUsageKwh ?? ANNUAL_USAGE_KWH;
+    const electricityRate = billData?.electricityRate ?? ELECTRICITY_RATE;
+
+    const config = pickBestConfig(solarPanelConfigs, annualUsageKwh);
+    const cashFlow = buildCashFlow(config, panelCapacityWatts, {
+      annualUsageKwh,
+      electricityRate,
+    });
+    const cost = systemCost(config.panelsCount, panelCapacityWatts);
+
+    const largestSegment = roofSegmentStats.reduce((best, s) =>
+      s.stats.areaMeters2 > best.stats.areaMeters2 ? s : best
+    );
+
+    const payback = paybackYear(cashFlow, cost);
+    const netSavings25 = cashFlow[cashFlow.length - 1].cumulativeSavings;
+
+    const verdict = getVerdict({
+      paybackYear: payback,
+      netSavings25yr: netSavings25,
+      dominantAzimuth: largestSegment.azimuthDegrees,
+      maxSunshineHoursPerYear,
+      electricityRate,
+    });
+
+    return {
+      panelsCount: config.panelsCount,
+      maxArrayPanelsCount,
+      sizeKw: systemSizeKw(config.panelsCount, panelCapacityWatts),
+      year1Production: cashFlow[0].production,
+      cost,
+      payback,
+      netSavings25,
+      segmentCount: roofSegmentStats.length,
+      dominantAzimuth: largestSegment.azimuthDegrees,
+      maxSunshineHoursPerYear,
+      verdict,
+    };
+  }, [solarData, billData]);
 
   return (
     <div style={{ maxWidth: 720, margin: '2rem auto', fontFamily: 'system-ui' }}>
@@ -96,9 +161,40 @@ function App() {
       <p>Gemini key loaded: {geminiKeyLoaded ? '✅' : '❌'}</p>
       <p>Test address: {TEST_ADDRESS.lat}, {TEST_ADDRESS.lng}</p>
 
+      {/* Temporary Gemini wiring check — delete once confirmed */}
+      <p>
+        <button onClick={testGemini}>Test Gemini</button>{' '}
+        {geminiResult && <span>Gemini says: {geminiResult}</span>}
+      </p>
+
+      {/* Electric bill upload + extraction */}
+      <div>
+        <label>
+          Upload electric bill (image or PDF):{' '}
+          <input
+            type="file"
+            accept="image/*,application/pdf"
+            onChange={handleBillUpload}
+          />
+        </label>
+        {billStatus && <p>{billStatus}</p>}
+        {billData && (
+          <>
+            <p>Annual usage: {billData.annualUsageKwh ?? 'not found'} kWh</p>
+            <p>Electricity rate: {billData.electricityRate ?? 'not found'} $/kWh</p>
+          </>
+        )}
+        {billRawText && <pre style={{ whiteSpace: 'pre-wrap' }}>{billRawText}</pre>}
+      </div>
+
       <div id="results">
         {results ? (
           <>
+            <p style={{ fontWeight: 700 }}>
+              {usingBill
+                ? '📄 Using your bill'
+                : 'Using default estimates (upload a bill to personalize)'}
+            </p>
             <div
               style={{
                 background: VERDICT_COLORS[results.verdict.rating] ?? '#333',

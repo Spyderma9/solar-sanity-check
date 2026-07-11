@@ -52,19 +52,25 @@ export function systemSizeKw(panelsCount, panelCapacityWatts) {
  * Example input shape:
  *   config = { panelsCount: 20, yearlyEnergyDcKwh: 9800.2 }
  *   panelCapacityWatts = 400
+ *   options = { annualUsageKwh: 15206, electricityRate: 0.19685 } // optional,
+ *     defaults to ANNUAL_USAGE_KWH / ELECTRICITY_RATE when no bill is provided
  *
  * Returns: [{ year: 1, production, savings, cumulativeSavings }, ...]
  */
-// eslint-disable-next-line no-unused-vars -- kept for a stable signature;nproduction derives from config.yearlyEnergyDcKwh
-export function buildCashFlow(config, panelCapacityWatts) {
+export function buildCashFlow(config, panelCapacityWatts, options = {}) {
+  const {
+    annualUsageKwh = ANNUAL_USAGE_KWH,
+    electricityRate = ELECTRICITY_RATE,
+  } = options;
+
   const cashFlow = [];
   let cumulativeSavings = 0;
 
   for (let year = 1; year <= SYSTEM_LIFETIME_YEARS; year++) {
     const production =
       config.yearlyEnergyDcKwh * Math.pow(1 - ANNUAL_DEGRADATION, year - 1);
-    const rate = ELECTRICITY_RATE * Math.pow(1 + RATE_INFLATION, year - 1);
-    const savings = Math.min(production, ANNUAL_USAGE_KWH) * rate;
+    const rate = electricityRate * Math.pow(1 + RATE_INFLATION, year - 1);
+    const savings = Math.min(production, annualUsageKwh) * rate;
     cumulativeSavings += savings;
 
     cashFlow.push({ year, production, savings, cumulativeSavings });
