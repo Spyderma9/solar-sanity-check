@@ -3,12 +3,14 @@ import { TEST_ADDRESS } from './fixtures/testAddress';
 import { getBuildingInsights } from './api/solar';
 import {
   ANNUAL_USAGE_KWH,
+  ELECTRICITY_RATE,
   pickBestConfig,
   systemSizeKw,
   buildCashFlow,
   systemCost,
   paybackYear,
 } from './lib/financials';
+import { getVerdict } from './lib/verdict';
 
 function friendlyError(message) {
   if (message.includes('403')) {
@@ -19,6 +21,13 @@ function friendlyError(message) {
   }
   return `Error: ${message}`;
 }
+
+// High-contrast badge colors (white text on all three)
+const VERDICT_COLORS = {
+  GOOD: '#1a7f37', // green
+  MARGINAL: '#b35900', // amber, dark enough for white text
+  NO: '#c62828', // red
+};
 
 function App() {
   const solarKeyLoaded = Boolean(import.meta.env.VITE_SOLAR_KEY);
@@ -47,17 +56,29 @@ function App() {
           s.stats.areaMeters2 > best.stats.areaMeters2 ? s : best
         );
 
+        const payback = paybackYear(cashFlow, cost);
+        const netSavings25 = cashFlow[cashFlow.length - 1].cumulativeSavings;
+
+        const verdict = getVerdict({
+          paybackYear: payback,
+          netSavings25yr: netSavings25,
+          dominantAzimuth: largestSegment.azimuthDegrees,
+          maxSunshineHoursPerYear,
+          electricityRate: ELECTRICITY_RATE,
+        });
+
         setResults({
           panelsCount: config.panelsCount,
           maxArrayPanelsCount,
           sizeKw: systemSizeKw(config.panelsCount, panelCapacityWatts),
           year1Production: cashFlow[0].production,
           cost,
-          payback: paybackYear(cashFlow, cost),
-          netSavings25: cashFlow[cashFlow.length - 1].cumulativeSavings,
+          payback,
+          netSavings25,
           segmentCount: roofSegmentStats.length,
           dominantAzimuth: largestSegment.azimuthDegrees,
           maxSunshineHoursPerYear,
+          verdict,
         });
         setStatus('Loaded');
       })
@@ -78,6 +99,25 @@ function App() {
       <div id="results">
         {results ? (
           <>
+            <div
+              style={{
+                background: VERDICT_COLORS[results.verdict.rating] ?? '#333',
+                color: '#fff',
+                borderRadius: 8,
+                padding: '1rem 1.5rem',
+                margin: '1rem 0',
+              }}
+            >
+              <div style={{ fontSize: '3rem', fontWeight: 800, letterSpacing: 2 }}>
+                {results.verdict.rating}
+              </div>
+              <ul style={{ fontSize: '1.25rem', margin: '0.5rem 0 0', paddingLeft: '1.5rem' }}>
+                {results.verdict.reasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            </div>
+
             <h2>Results</h2>
             <p>Recommended panels: {results.panelsCount} (roof max: {results.maxArrayPanelsCount})</p>
             <p>System size: {results.sizeKw.toFixed(1)} kW</p>
