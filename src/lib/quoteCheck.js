@@ -1,17 +1,21 @@
+import { INSTALL_COST_PER_WATT } from './financials.js';
+import { LOAN_APR } from './financing.js';
+import { fmtMoney as money } from './format.js';
+
 // =============================================================================
 // Tunable thresholds — grounded in typical US residential solar
 // =============================================================================
 
-export const FAIR_PRICE_PER_WATT = 3.0; // ~national average, $/W installed
+// Fair baselines are the same market assumptions the cost model uses, so the
+// app's own math and its quote judgments can't drift apart
+export const FAIR_PRICE_PER_WATT = INSTALL_COST_PER_WATT; // ~national average, $/W installed
+export const FAIR_APR = LOAN_APR; // competitive solar loan rate
 export const HIGH_PRICE_PER_WATT = 3.5; // above this is clearly overpriced
-export const FAIR_APR = 0.08; // competitive solar loan rate
 export const HIGH_APR = 0.1; // above this is a costly loan
 export const DEALER_FEE_FLAG_PCT = 0.1; // fee > 10% of price is a red flag
 
 // Severity order for computing the worst verdict
 const SEVERITY = { FAIR: 0, OVERPRICED: 1, PREDATORY: 2 };
-
-const money = (n) => '$' + Math.abs(Math.round(n)).toLocaleString();
 const pct = (n) => (n * 100).toFixed(1).replace(/\.0$/, '') + '%';
 
 // Natural-language join for headline fragments:

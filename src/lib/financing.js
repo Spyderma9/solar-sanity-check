@@ -6,7 +6,7 @@ export const LOAN_APR = 0.08; // typical solar loan rate
 export const LOAN_TERM_YEARS = 25; // fully amortized within the 25-year comparison window
 export const LEASE_ANNUAL_ESCALATOR = 0.029; // lease payments rise ~2.9%/yr
 export const LEASE_FIRST_YEAR_FACTOR = 0.85; // lease year-1 payment ≈ 85% of what grid power would cost
-export const DEALER_FEE_PCT = 0.3; // hidden dealer fee can add up to 30% to system cost
+export const MAX_DEALER_FEE_PCT = 0.3; // hidden dealer fees can add up to 30% to system cost
 
 // =============================================================================
 // Pure financing functions
@@ -28,6 +28,27 @@ function findPaybackYear(rows) {
   return entry ? entry.year : null;
 }
 
+// Shared core for all three options: run the yearly accumulation and assemble
+// rows + summary. perYear(year, savings) returns the row's fields, including
+// netCashFlow, which drives the running cumulative.
+function buildOption(startingCumulative, energyCashFlow, perYear, summaryExtras = {}) {
+  let cumulative = startingCumulative;
+  const rows = energyCashFlow.map(({ year, savings }) => {
+    const row = perYear(year, savings);
+    cumulative += row.netCashFlow;
+    return { year, ...row, cumulative };
+  });
+
+  return {
+    rows,
+    summary: {
+      ...summaryExtras,
+      year25NetPosition: rows[rows.length - 1].cumulative,
+      paybackYear: findPaybackYear(rows),
+    },
+  };
+}
+
 /**
  * Option 1: pay cash upfront.
  * netCashFlow each year = that year's energy savings;
@@ -39,23 +60,12 @@ function findPaybackYear(rows) {
 export function cashPurchase(systemCost, energyCashFlow, dealerFeePct = 0) {
   const effectiveCost = systemCost * (1 + dealerFeePct);
 
-  let cumulative = -effectiveCost;
-  const rows = energyCashFlow.map(({ year, savings }) => {
-    cumulative += savings;
-    return { year, netCashFlow: savings, cumulative };
+  return buildOption(-effectiveCost, energyCashFlow, (year, savings) => ({ netCashFlow: savings }), {
+    baseCost: systemCost,
+    effectiveCost, // e.g. "System: $24,000 → With dealer fee: $31,200"
+    dealerFeePct,
+    upfrontCost: effectiveCost,
   });
-
-  return {
-    rows,
-    summary: {
-      baseCost: systemCost,
-      effectiveCost, // e.g. "System: $24,000 → With dealer fee: $31,200"
-      dealerFeePct,
-      upfrontCost: effectiveCost,
-      year25NetPosition: rows[rows.length - 1].cumulative,
-      paybackYear: findPaybackYear(rows),
-    },
-  };
 }
 
 /**
@@ -74,35 +84,22 @@ export function cashPurchase(systemCost, energyCashFlow, dealerFeePct = 0) {
  */
 export function loanFinanced(systemCost, energyCashFlow, dealerFeePct = 0) {
   const effectiveCost = systemCost * (1 + dealerFeePct);
-  const principal = effectiveCost;
   const r = LOAN_APR;
   const n = LOAN_TERM_YEARS;
-  const annualPayment = (principal * r) / (1 - Math.pow(1 + r, -n));
+  const annualPayment = (effectiveCost * r) / (1 - Math.pow(1 + r, -n));
 
-  // With a 25-year term the loan is fully amortized exactly at the horizon,
-  // so total interest = all payments made minus the principal borrowed.
-  const totalInterestPaid = annualPayment * n - principal;
-
-  let cumulative = 0; // nothing down
-  const rows = energyCashFlow.map(({ year, savings }) => {
-    // Term matches the 25-year window, so a payment applies every year.
-    const netCashFlow = savings - annualPayment;
-    cumulative += netCashFlow;
-    return { year, annualPayment, netCashFlow, cumulative };
-  });
-
-  return {
-    rows,
-    totalInterestPaid,
-    summary: {
+  // Term matches the 25-year window, so a payment applies every year.
+  return buildOption(
+    0, // nothing down
+    energyCashFlow,
+    (year, savings) => ({ annualPayment, netCashFlow: savings - annualPayment }),
+    {
       baseCost: systemCost,
       effectiveCost, // e.g. "System: $24,000 → With dealer fee: $31,200"
       dealerFeePct,
       upfrontCost: 0,
-      year25NetPosition: rows[rows.length - 1].cumulative,
-      paybackYear: findPaybackYear(rows),
-    },
-  };
+    }
+  );
 }
 
 /**
@@ -115,23 +112,16 @@ export function loanFinanced(systemCost, energyCashFlow, dealerFeePct = 0) {
 export function leaseFinanced(energyCashFlow) {
   const firstYearPayment = LEASE_FIRST_YEAR_FACTOR * energyCashFlow[0].savings;
 
-  let cumulative = 0; // nothing down
-  const rows = energyCashFlow.map(({ year, savings }) => {
-    const leasePayment =
-      firstYearPayment * Math.pow(1 + LEASE_ANNUAL_ESCALATOR, year - 1);
-    const netCashFlow = savings - leasePayment;
-    cumulative += netCashFlow;
-    return { year, leasePayment, netCashFlow, cumulative };
-  });
-
-  return {
-    rows,
-    summary: {
-      upfrontCost: 0,
-      year25NetPosition: rows[rows.length - 1].cumulative,
-      paybackYear: findPaybackYear(rows),
+  return buildOption(
+    0, // nothing down
+    energyCashFlow,
+    (year, savings) => {
+      const leasePayment =
+        firstYearPayment * Math.pow(1 + LEASE_ANNUAL_ESCALATOR, year - 1);
+      return { leasePayment, netCashFlow: savings - leasePayment };
     },
-  };
+    { upfrontCost: 0 }
+  );
 }
 
 /**

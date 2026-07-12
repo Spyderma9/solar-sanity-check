@@ -64,6 +64,7 @@ export default function RoofDesigner({
   onTogglePanel,
   onReset,
   isCustomized = false,
+  recommendedCount = null,
 }) {
   const [imageStatus, setImageStatus] = useState('loading'); // loading | loaded | error
   const [hoveredId, setHoveredId] = useState(null);
@@ -171,11 +172,11 @@ export default function RoofDesigner({
           width: SIZE,
           height: SIZE,
           touchAction: 'none',
-          border: '1px solid #d1d5db',
-          borderRadius: 12,
+          border: '1px solid var(--line)',
+          borderRadius: 'var(--radius)',
           overflow: 'hidden',
-          background: '#e5e7eb',
-          boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
+          background: 'var(--card)',
+          boxShadow: 'var(--shadow)',
         }}
       >
         {imageStatus === 'loading' && (
@@ -188,7 +189,7 @@ export default function RoofDesigner({
               alignItems: 'center',
               justifyContent: 'center',
               gap: '0.75rem',
-              color: '#6b7280',
+              color: 'var(--muted)',
             }}
           >
             <div className="roof-spinner" />
@@ -203,7 +204,7 @@ export default function RoofDesigner({
               width: '100%',
               textAlign: 'center',
               margin: 0,
-              color: '#c62828',
+              color: 'var(--bad)',
             }}
           >
             Could not load satellite image — check that the Maps Static API is enabled for your key.
@@ -324,7 +325,10 @@ export default function RoofDesigner({
               </strong>{' '}
               panels
             </span>
-            <span style={{ opacity: 0.75 }}>click a panel to toggle</span>
+            <span style={{ opacity: 0.75 }}>
+              click a panel to toggle
+              {recommendedCount != null && ` · recommended: ${recommendedCount}`}
+            </span>
             {isCustomized && (
               <button
                 onClick={onReset}

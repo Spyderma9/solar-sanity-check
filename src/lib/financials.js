@@ -89,11 +89,80 @@ export function systemCost(panelsCount, panelCapacityWatts) {
 
 /**
  * First year where cumulativeSavings >= cost, or null if it never
- * pays back within the 25-year window.
+ * pays back within the 25-year window. Zero cost means no system at all,
+ * which would trivially "pay back" in year 1 — treat it as never instead.
  *
  * Example: paybackYear(buildCashFlow(config, 400), 24000) => 13
  */
 export function paybackYear(cashFlow, cost) {
+  if (cost <= 0) return null;
   const entry = cashFlow.find((y) => y.cumulativeSavings >= cost);
   return entry ? entry.year : null;
+}
+
+/**
+ * Full financial + roof summary for a set of active panels — everything the
+ * UI shows except the verdict itself.
+ *
+ * solarPotential is the Solar API's solarPotential object; activePanelIds is
+ * a Set of indexes into solarPotential.solarPanels.
+ *
+ * Returns { panelsCount, maxArrayPanelsCount, sizeKw, year1Production, cost,
+ *           cashFlow, payback, netSavings25, segmentCount, arraySegment,
+ *           maxSunshineHoursPerYear }
+ */
+export function summarizeSystem(solarPotential, activePanelIds, options) {
+  const {
+    panelCapacityWatts,
+    solarPanels,
+    maxArrayPanelsCount,
+    roofSegmentStats,
+    maxSunshineHoursPerYear,
+  } = solarPotential;
+
+  // One pass over the active panels: total energy plus energy per roof segment
+  let yearlyEnergyDcKwh = 0;
+  const energyBySegment = new Map();
+  for (const i of activePanelIds) {
+    const panel = solarPanels[i];
+    if (!panel) continue;
+    yearlyEnergyDcKwh += panel.yearlyEnergyDcKwh;
+    energyBySegment.set(
+      panel.segmentIndex,
+      (energyBySegment.get(panel.segmentIndex) ?? 0) + panel.yearlyEnergyDcKwh
+    );
+  }
+
+  const largestSegment = roofSegmentStats.reduce((best, s) =>
+    s.stats.areaMeters2 > best.stats.areaMeters2 ? s : best
+  );
+
+  // The segment that hosts the array (most active-panel energy) — the largest
+  // segment can face the wrong way while the panels sit on a better one
+  const arraySegment =
+    energyBySegment.size > 0
+      ? roofSegmentStats[
+          [...energyBySegment.entries()].reduce((best, e) =>
+            e[1] > best[1] ? e : best
+          )[0]
+        ] ?? largestSegment
+      : largestSegment;
+
+  const cashFlow = buildCashFlow({ yearlyEnergyDcKwh }, panelCapacityWatts, options);
+  const panelsCount = activePanelIds.size;
+  const cost = systemCost(panelsCount, panelCapacityWatts);
+
+  return {
+    panelsCount,
+    maxArrayPanelsCount,
+    sizeKw: systemSizeKw(panelsCount, panelCapacityWatts),
+    year1Production: cashFlow[0].production,
+    cost,
+    cashFlow,
+    payback: paybackYear(cashFlow, cost),
+    netSavings25: cashFlow[cashFlow.length - 1].cumulativeSavings,
+    segmentCount: roofSegmentStats.length,
+    arraySegment,
+    maxSunshineHoursPerYear,
+  };
 }

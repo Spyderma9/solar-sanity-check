@@ -8,6 +8,9 @@ export const NORTH_FACING_TOLERANCE_DEG = 45; // within this many degrees of due
 // East/west band: azimuth in [45, 135] (east) or [225, 315] (west) => MARGINAL
 export const EAST_BAND = [45, 135];
 export const WEST_BAND = [225, 315];
+// Flatter than this, racking sets the panel tilt and the roof's azimuth is
+// meaningless (the API reports 0° for flat segments, which would read as north)
+export const FLAT_ROOF_MAX_PITCH_DEG = 10;
 
 // =============================================================================
 // Pure verdict function
@@ -34,16 +37,25 @@ function isEastWestFacing(azimuth) {
  *   inputs = {
  *     paybackYear: 10,              // number or null
  *     netSavings25yr: 56654,        // dollars
- *     dominantAzimuth: 269,         // degrees
+ *     dominantAzimuth: 269,         // degrees, of the segment hosting the array
+ *     dominantPitch: 18,            // degrees; near-flat disables azimuth checks
  *     maxSunshineHoursPerYear: 1839,
- *     electricityRate: 0.15,        // $/kWh (carried for future tuning)
  *   }
  *
  * Returns: { rating: "GOOD" | "MARGINAL" | "NO", reasons: string[] }
  */
 export function getVerdict(inputs) {
-  const { paybackYear, netSavings25yr, dominantAzimuth, maxSunshineHoursPerYear } =
-    inputs;
+  const {
+    paybackYear,
+    netSavings25yr,
+    dominantAzimuth,
+    dominantPitch,
+    maxSunshineHoursPerYear,
+  } = inputs;
+
+  // On a flat roof the reported azimuth is meaningless — orientation checks off
+  const orientationMatters =
+    dominantPitch == null || dominantPitch >= FLAT_ROOF_MAX_PITCH_DEG;
 
   // --- Hard stops => NO ---
   const noReasons = [];
@@ -58,7 +70,7 @@ export function getVerdict(inputs) {
       `Roof gets only ${Math.round(maxSunshineHoursPerYear)} sunshine hours per year — too shaded for solar to make sense.`
     );
   }
-  if (isNorthFacing(dominantAzimuth)) {
+  if (orientationMatters && isNorthFacing(dominantAzimuth)) {
     noReasons.push('Roof faces mostly north, which badly limits production.');
   }
   if (noReasons.length > 0) {
@@ -72,7 +84,7 @@ export function getVerdict(inputs) {
       `Payback is ${paybackYear} years, longer than we'd call a confident yes.`
     );
   }
-  if (isEastWestFacing(dominantAzimuth)) {
+  if (orientationMatters && isEastWestFacing(dominantAzimuth)) {
     marginalReasons.push(
       'Roof faces east/west rather than south, which reduces production.'
     );
@@ -85,7 +97,9 @@ export function getVerdict(inputs) {
   return {
     rating: 'GOOD',
     reasons: [
-      `South-facing roof with strong sunlight (${Math.round(maxSunshineHoursPerYear)} hours/year).`,
+      orientationMatters
+        ? `Well-oriented roof with strong sunlight (${Math.round(maxSunshineHoursPerYear)} hours/year).`
+        : `Flat roof with strong sunlight (${Math.round(maxSunshineHoursPerYear)} hours/year) — racking can aim the panels south.`,
       `Pays for itself in ${paybackYear} years.`,
     ],
   };

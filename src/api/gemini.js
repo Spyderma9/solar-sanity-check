@@ -39,10 +39,6 @@ async function generateContent(parts) {
   }
 }
 
-export async function callGemini(promptText) {
-  return generateContent([{ text: promptText }]);
-}
-
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -70,13 +66,31 @@ Rules:
   all-in rate is explicitly stated.
 - If a value cannot be found, use null for that field.`;
 
-export async function extractBillData(file) {
+// Runs a prompt against an uploaded file and parses the model's JSON reply.
+// Returns { data } on success, or { raw } with the unparsed text when the
+// model didn't return valid JSON (so the UI can show it).
+async function extractFromFile(file, prompt) {
   const base64 = await fileToBase64(file);
   const raw = await generateContent([
-    { text: BILL_PROMPT },
+    { text: prompt },
     { inline_data: { mime_type: file.type, data: base64 } },
   ]);
-  return raw;
+
+  // Strip accidental ```json fences before parsing
+  const cleaned = raw
+    .replace(/^\s*```(?:json)?\s*/i, '')
+    .replace(/\s*```\s*$/, '')
+    .trim();
+
+  try {
+    return { data: JSON.parse(cleaned) };
+  } catch {
+    return { raw };
+  }
+}
+
+export async function extractBillData(file) {
+  return extractFromFile(file, BILL_PROMPT);
 }
 
 const QUOTE_PROMPT = `You are reading a solar installer's quote or proposal. It may contain one or several pricing/financing options. Return ONLY strict JSON — no markdown, no code fences, no prose — as an ARRAY with one element per option found (typically 1-3). If only one option exists, return a single-element array. Each element must have exactly this shape:
@@ -103,10 +117,10 @@ Rules for each option:
 - Use null for any field that cannot be found (except pricePerWatt, which should be computed from totalPrice and systemSizeKw when possible).`;
 
 export async function extractQuoteData(file) {
-  const base64 = await fileToBase64(file);
-  const raw = await generateContent([
-    { text: QUOTE_PROMPT },
-    { inline_data: { mime_type: file.type, data: base64 } },
-  ]);
-  return raw;
+  const result = await extractFromFile(file, QUOTE_PROMPT);
+  // Expect an array of options; tolerate a bare object by wrapping it
+  if (result.data !== undefined && !Array.isArray(result.data)) {
+    result.data = [result.data];
+  }
+  return result;
 }
