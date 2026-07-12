@@ -509,6 +509,7 @@ function App() {
         onReset={() => setCustomPanelIds(null)}
         isCustomized={customPanelIds !== null}
         recommendedCount={recommendedCount}
+        imageryDate={solarData?.imageryDate ?? null}
       />
 
       {results && (

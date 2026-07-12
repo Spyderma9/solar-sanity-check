@@ -4,12 +4,18 @@ const SIZE = 600;
 // Zoom is chosen per roof so the whole panel array fits; Static Maps needs an integer.
 const MIN_ZOOM = 16;
 const MAX_ZOOM = 22;
+// Above this, Static Maps silently serves its max available satellite imagery
+// (often 20-21) at the WRONG extent, so overlays no longer line up. We never
+// request past it — higher zooms upscale the image in CSS instead, which keeps
+// the photo and the panel boxes locked together at every zoom.
+const IMAGERY_MAX_ZOOM = 20;
 // Pixels kept clear around the array (also leaves room for the bottom toolbar)
 const FIT_PADDING = 60;
 
 function staticMapUrl(lat, lng, zoom) {
   const key = import.meta.env.VITE_SOLAR_KEY;
-  return `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=${zoom}&size=${SIZE}x${SIZE}&maptype=satellite&key=${key}`;
+  // scale=2 doubles the image resolution (1200px served, displayed at 600)
+  return `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=${zoom}&size=${SIZE}x${SIZE}&scale=2&maptype=satellite&key=${key}`;
 }
 
 // Web Mercator position as a fraction of the world square (0..1 on each axis) —
@@ -65,6 +71,7 @@ export default function RoofDesigner({
   onReset,
   isCustomized = false,
   recommendedCount = null,
+  imageryDate = null,
 }) {
   const [imageStatus, setImageStatus] = useState('loading'); // loading | loaded | error
   const [hoveredId, setHoveredId] = useState(null);
@@ -126,7 +133,9 @@ export default function RoofDesigner({
     return () => el.removeEventListener('wheel', onWheel);
   }, [view.zoom]);
 
-  const mapUrl = staticMapUrl(view.lat, view.lng, zoom);
+  const imgZoom = Math.min(zoom, IMAGERY_MAX_ZOOM);
+  const imgScale = Math.pow(2, zoom - imgZoom);
+  const mapUrl = staticMapUrl(view.lat, view.lng, imgZoom);
 
   // A new address/zoom means a new image request — show the spinner again
   const [prevMapUrl, setPrevMapUrl] = useState(mapUrl);
@@ -150,14 +159,19 @@ export default function RoofDesigner({
         zoom
       );
       const landscape = panel.orientation === 'LANDSCAPE';
+      const segment = roofSegments[panel.segmentIndex];
+      // Seen from above, lengths along the slope shrink by cos(pitch) — after
+      // rotation the panel's height axis runs up the slope, so foreshorten it
+      const foreshorten = Math.cos(((segment?.pitchDegrees ?? 0) * Math.PI) / 180);
       return {
         key: i,
         x,
         y,
         w: landscape ? portraitH : portraitW,
-        h: landscape ? portraitW : portraitH,
+        h: (landscape ? portraitW : portraitH) * foreshorten,
         // Align the panel with its roof segment so rows follow the roof lines
-        azimuth: roofSegments[panel.segmentIndex]?.azimuthDegrees ?? 0,
+        azimuth: segment?.azimuthDegrees ?? 0,
+        kwh: panel.yearlyEnergyDcKwh,
       };
     });
   }, [panels, view, zoom, panelWidthMeters, panelHeightMeters, roofSegments]);
@@ -217,7 +231,13 @@ export default function RoofDesigner({
               width={SIZE}
               height={SIZE}
               className={imageStatus === 'loaded' ? 'roof-fade-in' : undefined}
-              style={{ display: 'block', opacity: imageStatus === 'loaded' ? 1 : 0 }}
+              style={{
+                display: 'block',
+                opacity: imageStatus === 'loaded' ? 1 : 0,
+                // Zoom past the imagery cap by scaling about the center — the
+                // map is centered on the frame, so geometry stays exact
+                transform: imgScale !== 1 ? `scale(${imgScale})` : undefined,
+              }}
               onLoad={() => setImageStatus('loaded')}
               onError={() => setImageStatus('error')}
             />
@@ -234,7 +254,9 @@ export default function RoofDesigner({
                     onMouseLeave={() => setHoveredId(null)}
                     onFocus={() => setHoveredId(p.key)}
                     onBlur={() => setHoveredId(null)}
-                    title={active ? 'Click to remove panel' : 'Click to add panel'}
+                    title={`${active ? 'Click to remove panel' : 'Click to add panel'}${
+                      p.kwh != null ? ` · ${Math.round(p.kwh)} kWh/yr` : ''
+                    }`}
                     aria-pressed={active}
                     aria-label={`Panel ${p.key + 1}`}
                     style={{
@@ -261,6 +283,27 @@ export default function RoofDesigner({
                   />
                 );
               })}
+          </div>
+        )}
+        {imageStatus === 'loaded' && imageryDate?.year && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 8,
+              left: 8,
+              padding: '0.15rem 0.5rem',
+              borderRadius: 5,
+              background: 'rgba(10, 14, 22, 0.72)',
+              color: '#fff',
+              fontSize: '0.68rem',
+              opacity: 0.9,
+            }}
+          >
+            Imagery:{' '}
+            {new Date(imageryDate.year, (imageryDate.month ?? 1) - 1).toLocaleString(undefined, {
+              month: 'short',
+              year: 'numeric',
+            })}
           </div>
         )}
         {imageStatus !== 'error' && (
