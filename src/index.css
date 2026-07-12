@@ -514,6 +514,35 @@ h2 {
   background: var(--bad);
 }
 
+/* ---------- report download ---------- */
+.report-box {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-top: 2rem;
+}
+
+.report-box .hint {
+  margin: 0.15rem 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  max-width: 42ch;
+}
+
+.report-box button {
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #fdfcf8;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  padding: 0.55rem 1rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
 /* ---------- misc ---------- */
 .status-line {
   color: var(--muted);

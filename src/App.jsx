@@ -240,6 +240,31 @@ function App() {
     );
   }, [quoteData, results, billData]);
 
+  // One-sentence answer to "is any of these quote options worth it for me?"
+  // Shared by the Money page banner and the PDF report.
+  const worthStatement = useMemo(() => {
+    if (!quoteWorth || !quoteData) return null;
+    const evaluated = quoteWorth
+      .map((w, i) => ({ w, label: quoteData[i].optionLabel ?? `Option ${i + 1}` }))
+      .filter((e) => e.w);
+    if (evaluated.length === 0) return null;
+    const worthy = evaluated.filter((e) => e.w.worthIt);
+    const best = (worthy.length > 0 ? worthy : evaluated).reduce((a, b) =>
+      b.w.net25 > a.w.net25 ? b : a
+    );
+    const basis = usingBill ? 'your electric bill' : 'default usage estimates';
+    return {
+      worthIt: best.w.worthIt,
+      text: best.w.worthIt
+        ? `Based on ${basis} and your roof, the ${best.label} option is worth it — it pays back in year ${best.w.paybackYear} and leaves you ${fmtMoney(best.w.net25)} ahead after 25 years.`
+        : `Based on ${basis} and your roof, none of these options is worth it — the best of them ${
+            best.w.paybackYear
+              ? `doesn't pay back until year ${best.w.paybackYear}`
+              : 'never pays back within 25 years'
+          } and ends ${fmtMoney(best.w.net25)} after 25 years.`,
+    };
+  }, [quoteWorth, quoteData, usingBill]);
+
   // Dealer-fee slider (0–30%), stored as a whole percent for clean stepping
   const [dealerFeePercent, setDealerFeePercent] = useState(0);
 
@@ -269,6 +294,25 @@ function App() {
         : best
     )[0];
   }, [financing]);
+
+  // Lazy-load the PDF library only when someone actually asks for the report
+  async function downloadReport() {
+    const { generateReport } = await import('./lib/report');
+    generateReport({
+      addressLabel: location.label ?? `${location.lat}, ${location.lng}`,
+      usingBill,
+      billData,
+      results,
+      tagline: VERDICT_TAGLINE[results.verdict.rating],
+      financing,
+      dealerFeePercent,
+      quotedPrice,
+      quoteData,
+      quoteAnalysis,
+      quoteWorth,
+      worthStatement,
+    });
+  }
 
   return (
     <div className="page">
@@ -380,29 +424,11 @@ function App() {
       {quoteData && quoteAnalysis && (
         <>
           <p className="quote-headline">{quoteAnalysis.summary.headline}</p>
-          {quoteWorth &&
-            (() => {
-              const evaluated = quoteWorth
-                .map((w, i) => ({ w, label: quoteData[i].optionLabel ?? `Option ${i + 1}` }))
-                .filter((e) => e.w);
-              if (evaluated.length === 0) return null;
-              const worthy = evaluated.filter((e) => e.w.worthIt);
-              const best = (worthy.length > 0 ? worthy : evaluated).reduce((a, b) =>
-                b.w.net25 > a.w.net25 ? b : a
-              );
-              const basis = usingBill ? 'your electric bill' : 'default usage estimates';
-              return (
-                <div className={best.w.worthIt ? 'worth worth-good' : 'worth worth-bad'}>
-                  {best.w.worthIt
-                    ? `Based on ${basis} and your roof, the ${best.label} option is worth it — it pays back in year ${best.w.paybackYear} and leaves you ${fmtMoney(best.w.net25)} ahead after 25 years.`
-                    : `Based on ${basis} and your roof, none of these options is worth it — the best of them ${
-                        best.w.paybackYear
-                          ? `doesn't pay back until year ${best.w.paybackYear}`
-                          : 'never pays back within 25 years'
-                      } and ends ${fmtMoney(best.w.net25)} after 25 years.`}
-                </div>
-              );
-            })()}
+          {worthStatement && (
+            <div className={worthStatement.worthIt ? 'worth worth-good' : 'worth worth-bad'}>
+              {worthStatement.text}
+            </div>
+          )}
           {quoteData.map((opt, i) => {
             const analysis = quoteAnalysis.options[i];
             const isWorst =
@@ -612,6 +638,21 @@ function App() {
                 </p>
               </div>
             </>
+      )}
+
+      {page === 'money' && results && (
+        <div className="card report-box">
+          <div>
+            <strong>Take this with you</strong>
+            <p className="hint">
+              A printable PDF of your verdict, numbers, financing comparison, quote check,
+              and the questions to ask an installer.
+            </p>
+          </div>
+          <button type="button" onClick={downloadReport}>
+            Download PDF report
+          </button>
+        </div>
       )}
     </div>
   );
