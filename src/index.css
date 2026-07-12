@@ -66,6 +66,32 @@ body {
   color: var(--accent);
 }
 
+.nav {
+  display: flex;
+  gap: 0.25rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.2rem;
+}
+
+.nav button {
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  padding: 0.25rem 0.8rem;
+  cursor: pointer;
+}
+
+.nav button.active {
+  background: var(--accent);
+  color: #fdfcf8;
+}
+
 .bill-chip {
   margin-left: auto;
   font-size: 0.8rem;
@@ -409,6 +435,23 @@ h2 {
   font-size: 1.05rem;
   font-weight: 700;
   margin: 0.75rem 0 0.5rem;
+}
+
+.worth {
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  margin: 0 0 0.75rem;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: #fdfcf8;
+}
+
+.worth-good {
+  background: var(--good);
+}
+
+.worth-bad {
+  background: var(--bad);
 }
 
 .quote-option {

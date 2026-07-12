@@ -17,6 +17,7 @@ import {
   MAX_DEALER_FEE_PCT,
 } from './lib/financing';
 import { analyzeQuotes } from './lib/quoteCheck';
+import { evaluateQuoteOption } from './lib/quoteWorth';
 import { fmtMoney } from './lib/format';
 import RoofDesigner from './RoofDesigner';
 
@@ -101,6 +102,10 @@ function App() {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('theme', theme);
   }, [theme]);
+
+  // Which page is showing: the roof/verdict side or the money side.
+  // State lives above both, so uploads and toggles survive switching.
+  const [page, setPage] = useState('roof');
 
   const [billStatus, setBillStatus] = useState('');
   const [billData, setBillData] = useState(null); // parsed { annualUsageKwh, electricityRate }
@@ -210,18 +215,45 @@ function App() {
     return { ...summary, dominantAzimuth: summary.arraySegment.azimuthDegrees, verdict };
   }, [solarData, billData, activePanelIds]);
 
+  // The quote's system price (lowest option with a price — typically the cash
+  // option, before financing markup). Null until a quote is uploaded.
+  const quotedPrice = useMemo(() => {
+    const prices = quoteData?.map((o) => o.totalPrice).filter((p) => p != null) ?? [];
+    return prices.length > 0 ? Math.min(...prices) : null;
+  }, [quoteData]);
+
+  // Is each quoted option worth it for this household? Combines the roof's
+  // productivity, the quote's size/price/terms, and the bill's usage & rate.
+  const quoteWorth = useMemo(() => {
+    if (!quoteData || !results || results.sizeKw <= 0) return null;
+    const kwhPerKw = results.year1Production / results.sizeKw;
+    const usage = {
+      annualUsageKwh: billData?.annualUsageKwh ?? ANNUAL_USAGE_KWH,
+      electricityRate: billData?.electricityRate ?? ELECTRICITY_RATE,
+    };
+    return quoteData.map((opt) =>
+      evaluateQuoteOption(opt, {
+        production:
+          opt.systemSizeKw != null ? kwhPerKw * opt.systemSizeKw : results.year1Production,
+        ...usage,
+      })
+    );
+  }, [quoteData, results, billData]);
+
   // Dealer-fee slider (0–30%), stored as a whole percent for clean stepping
   const [dealerFeePercent, setDealerFeePercent] = useState(0);
 
-  // Financing comparison — recomputes live as the slider moves
+  // Financing comparison — recomputes live as the slider moves. Once a quote
+  // is uploaded, its real price replaces our modeled system cost.
   const financing = useMemo(() => {
     if (!results) return null;
+    const baseCost = quotedPrice ?? results.cost;
     const fee = dealerFeePercent / 100;
-    const cash = cashPurchase(results.cost, results.cashFlow, fee);
-    const loan = loanFinanced(results.cost, results.cashFlow, fee);
+    const cash = cashPurchase(baseCost, results.cashFlow, fee);
+    const loan = loanFinanced(baseCost, results.cashFlow, fee);
     const lease = leaseFinanced(results.cashFlow);
     return { cash, loan, lease, impact: dealerFeeImpact(loan) };
-  }, [results, dealerFeePercent]);
+  }, [results, dealerFeePercent, quotedPrice]);
 
   // Highlight the option that leaves the most money in your pocket
   const bestFinancing = useMemo(() => {
@@ -244,6 +276,22 @@ function App() {
         <div className="logo">
           Solar <em>Sanity</em> Check
         </div>
+        <nav className="nav">
+          <button
+            type="button"
+            className={page === 'roof' ? 'active' : ''}
+            onClick={() => setPage('roof')}
+          >
+            Your roof
+          </button>
+          <button
+            type="button"
+            className={page === 'money' ? 'active' : ''}
+            onClick={() => setPage('money')}
+          >
+            Money
+          </button>
+        </nav>
         <div className={usingBill ? 'bill-chip' : 'bill-chip default'}>
           {usingBill ? '✓ Using your bill' : 'Using default estimates'}
         </div>
@@ -258,6 +306,8 @@ function App() {
         </button>
       </header>
 
+      {page === 'roof' && (
+        <>
       {/* Address — the first thing to fill in */}
       <form className="addr-form card" onSubmit={handleAddressSubmit}>
         <label htmlFor="address">
@@ -279,7 +329,11 @@ function App() {
         </div>
         {addressError && <p className="addr-error">{addressError}</p>}
       </form>
+        </>
+      )}
 
+      {page === 'money' && (
+        <>
       {/* Uploads */}
       <div className="card">
         <div className="upload-row">
@@ -326,6 +380,29 @@ function App() {
       {quoteData && quoteAnalysis && (
         <>
           <p className="quote-headline">{quoteAnalysis.summary.headline}</p>
+          {quoteWorth &&
+            (() => {
+              const evaluated = quoteWorth
+                .map((w, i) => ({ w, label: quoteData[i].optionLabel ?? `Option ${i + 1}` }))
+                .filter((e) => e.w);
+              if (evaluated.length === 0) return null;
+              const worthy = evaluated.filter((e) => e.w.worthIt);
+              const best = (worthy.length > 0 ? worthy : evaluated).reduce((a, b) =>
+                b.w.net25 > a.w.net25 ? b : a
+              );
+              const basis = usingBill ? 'your electric bill' : 'default usage estimates';
+              return (
+                <div className={best.w.worthIt ? 'worth worth-good' : 'worth worth-bad'}>
+                  {best.w.worthIt
+                    ? `Based on ${basis} and your roof, the ${best.label} option is worth it — it pays back in year ${best.w.paybackYear} and leaves you ${fmtMoney(best.w.net25)} ahead after 25 years.`
+                    : `Based on ${basis} and your roof, none of these options is worth it — the best of them ${
+                        best.w.paybackYear
+                          ? `doesn't pay back until year ${best.w.paybackYear}`
+                          : 'never pays back within 25 years'
+                      } and ends ${fmtMoney(best.w.net25)} after 25 years.`}
+                </div>
+              );
+            })()}
           {quoteData.map((opt, i) => {
             const analysis = quoteAnalysis.options[i];
             const isWorst =
@@ -365,12 +442,25 @@ function App() {
                       : 'At or below fair-market price'}
                   </p>
                 )}
+                {quoteWorth?.[i] && (
+                  <p className="delta">
+                    For you:{' '}
+                    {quoteWorth[i].paybackYear != null
+                      ? `pays back in year ${quoteWorth[i].paybackYear} · ${fmtMoney(quoteWorth[i].net25)} after 25 years`
+                      : `never pays back within 25 years (${fmtMoney(quoteWorth[i].net25)})`}
+                  </p>
+                )}
               </div>
             );
           })}
         </>
       )}
+      {!results && <p className="status-line">{status}</p>}
+        </>
+      )}
 
+      {page === 'roof' && (
+        <>
       {results ? (
         <>
           <div className={`verdict ${VERDICT_CLASS[results.verdict.rating] ?? ''}`}>
@@ -450,10 +540,20 @@ function App() {
               </p>
             </div>
           </div>
+        </>
+      )}
+        </>
+      )}
 
-          {financing && (
+      {page === 'money' && results && financing && (
             <>
               <h2>How you pay changes everything</h2>
+              {quotedPrice != null && (
+                <p className="extracted">
+                  Using your quote's price ({fmtMoney(quotedPrice)}) instead of our{' '}
+                  {fmtMoney(results.cost)} estimate
+                </p>
+              )}
               {dealerFeePercent > 0 && (
                 <p className="extracted">
                   System: {fmtMoney(financing.cash.summary.baseCost)} → with dealer fee:{' '}
@@ -511,8 +611,6 @@ function App() {
                 </p>
               </div>
             </>
-          )}
-        </>
       )}
     </div>
   );
