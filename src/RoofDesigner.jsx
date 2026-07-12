@@ -75,6 +75,7 @@ export default function RoofDesigner({
 }) {
   const [imageStatus, setImageStatus] = useState('loading'); // loading | loaded | error
   const [hoveredId, setHoveredId] = useState(null);
+  const [sunView, setSunView] = useState(false); // color panels by production
 
   // Center the view on the panel array and pick the largest zoom where it all
   // fits inside the frame, so any roof fills the picture without clipping.
@@ -176,6 +177,21 @@ export default function RoofDesigner({
     });
   }, [panels, view, zoom, panelWidthMeters, panelHeightMeters, roofSegments]);
 
+  // Production range across the roof, for the sun-view color scale
+  const kwhRange = useMemo(() => {
+    const values = panels.map((p) => p.yearlyEnergyDcKwh).filter((v) => v != null);
+    if (values.length === 0) return null;
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    return max > min ? { min, max } : null;
+  }, [panels]);
+
+  // Bright gold for the sunniest spots down to deep blue for the weakest
+  function sunColor(kwh, alpha) {
+    const t = (kwh - kwhRange.min) / (kwhRange.max - kwhRange.min);
+    return `hsla(${210 - 162 * t}, ${55 + 25 * t}%, ${36 + 16 * t}%, ${alpha})`;
+  }
+
   return (
     <div>
       <h2>Roof Designer</h2>
@@ -267,9 +283,12 @@ export default function RoofDesigner({
                       height: p.h,
                       padding: 0,
                       transform: `rotate(${p.azimuth}deg)`,
-                      backgroundColor: active
-                        ? `rgba(16, 42, 92, ${hovered ? 0.92 : 0.8})`
-                        : `rgba(37, 99, 235, ${hovered ? 0.3 : 0.08})`,
+                      backgroundColor:
+                        sunView && kwhRange && p.kwh != null
+                          ? sunColor(p.kwh, active ? (hovered ? 1 : 0.9) : hovered ? 0.55 : 0.35)
+                          : active
+                            ? `rgba(16, 42, 92, ${hovered ? 0.92 : 0.8})`
+                            : `rgba(37, 99, 235, ${hovered ? 0.3 : 0.08})`,
                       backgroundImage: active ? CELL_GRID : 'none',
                       border: active
                         ? '1px solid rgba(203, 225, 255, 0.9)'
@@ -369,14 +388,35 @@ export default function RoofDesigner({
               panels
             </span>
             <span style={{ opacity: 0.75 }}>
-              click a panel to toggle
-              {recommendedCount != null && ` · recommended: ${recommendedCount}`}
+              {sunView
+                ? 'gold = most sun, blue = least'
+                : `click a panel to toggle${
+                    recommendedCount != null ? ` · recommended: ${recommendedCount}` : ''
+                  }`}
             </span>
+            {kwhRange && (
+              <button
+                onClick={() => setSunView((v) => !v)}
+                style={{
+                  marginLeft: 'auto',
+                  padding: '0.25rem 0.75rem',
+                  border: sunView
+                    ? '1px solid rgba(255, 205, 90, 0.9)'
+                    : '1px solid rgba(255,255,255,0.5)',
+                  borderRadius: 6,
+                  background: sunView ? 'rgba(242, 169, 59, 0.25)' : 'transparent',
+                  color: '#fff',
+                  cursor: 'pointer',
+                  fontSize: '0.8rem',
+                }}
+              >
+                ☀ Sun view
+              </button>
+            )}
             {isCustomized && (
               <button
                 onClick={onReset}
                 style={{
-                  marginLeft: 'auto',
                   padding: '0.25rem 0.75rem',
                   border: '1px solid rgba(255,255,255,0.5)',
                   borderRadius: 6,
